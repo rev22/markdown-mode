@@ -22,6 +22,7 @@
 ;; Copyright (C) 2012 Zhenlei Jia <zhenlei.jia@gmail.com>
 ;; Copyright (C) 2012 Peter Jones <pjones@pmade.com>
 ;; Copyright (C) 2013 Matus Goljer <dota.keys@gmail.com>
+;; Copyright (C) 2014 Michele Bini <michele.bini@gmail.com>
 
 ;; Author: Jason R. Blevins <jrblevin@sdf.org>
 ;; Maintainer: Jason R. Blevins <jrblevin@sdf.org>
@@ -1579,7 +1580,7 @@ immediately  after a list item, return nil."
         (end-of-line))
       levels)))
 
-(defun markdown-prev-list-item (level)
+(defun markdown-prev-list-item (level &optional unbounded)
   "Search backward from point for a list item with indentation LEVEL.
 Set point to the beginning of the item, and return point, or nil
 upon failure."
@@ -1604,27 +1605,34 @@ upon failure."
             (setq prev (point))
             nil)
            ;; Stop and return nil at item with lesser indentation
-           ((< (nth 3 bounds) level)
+           ((and (< (nth 3 bounds) level) (not unbounded))
             (setq prev nil)
-            nil)))
+            nil)
+	   (t
+	    t)))
          ;; Continue while indentation is the same or greater
          ((>= indent level) t)
          ;; Stop if current indentation is less than list item
          ;; and the next is blank
          ((and (< indent level)
-               (markdown-next-line-blank-p))
-          (setq prev nil))
+	       (markdown-next-line-blank-p)
+	       (not unbounded))
+	  (message "hmm")
+	  (setq prev nil))
          ;; Stop at a header
-         ((looking-at markdown-regex-header) (setq prev nil))
+	 ((and (looking-at markdown-regex-header) (not unbounded))
+	  (setq prev nil))
          ;; Stop at a horizontal rule
-         ((looking-at markdown-regex-hr) (setq prev nil))
+	 ((and (looking-at markdown-regex-hr) (not unbounded))
+	  (setq prev nil))
          ;; Otherwise, continue.
-         (t t))
+	 (t t))
       (forward-line -1)
+      (message "message %S" (point))
       (setq indent (markdown-cur-line-indent)))
     prev))
 
-(defun markdown-next-list-item (level)
+(defun markdown-next-list-item (level &optional unbounded)
   "Search forward from point for the next list item with indentation LEVEL.
 Set point to the beginning of the item, and return point, or nil
 upon failure."
@@ -1649,20 +1657,27 @@ upon failure."
             (setq next (point))
             nil)
            ;; Stop and return nil at item with lesser indentation
-           ((< (nth 3 bounds) level)
+           ((and (< (nth 3 bounds) level) (not unbounded))
             (setq next nil)
-            nil)))
+            nil)
+	   (t t)))
          ;; Continue while indentation is the same or greater
-         ((>= indent level) t)
+         ((and (>= indent level) (not unbounded))
+	  t)
          ;; Stop if current indentation is less than list item
          ;; and the previous line was blank.
          ((and (< indent level)
-               (markdown-prev-line-blank-p))
+               (markdown-prev-line-blank-p)
+	       (not unbounded))
           (setq next nil))
          ;; Stop at a header
-         ((looking-at markdown-regex-header) (setq next nil))
+         ((and (looking-at markdown-regex-header)
+	       (not unbounded))
+	  (setq next nil))
          ;; Stop at a horizontal rule
-         ((looking-at markdown-regex-hr) (setq next nil))
+         ((and (looking-at markdown-regex-hr)
+	       (not unbounded))
+	  (setq next nil))
          ;; Otherwise, continue.
          (t t))
       (forward-line)
@@ -3687,42 +3702,64 @@ increase the indentation by one level."
          ((string-match "[\\*\\+-]" marker)
           (insert new-indent marker)))))))
 
-(defun markdown-move-list-item-up ()
+(defun markdown-move-list-item-up (&optional unbounded)
   "Move the current list item up in the list when possible."
   (interactive)
-  (let (cur prev old)
+  (setq unbounded t)
+  (let (cur prev old n)
     (when (setq cur (markdown-cur-list-item-bounds))
       (setq old (point))
       (goto-char (nth 0 cur))
-      (if (markdown-prev-list-item (nth 3 cur))
-          (progn
-            (setq prev (markdown-cur-list-item-bounds))
-            (condition-case nil
-                (progn
-                  (transpose-regions (nth 0 prev) (nth 1 prev)
-                                     (nth 0 cur) (nth 1 cur) t)
-                  (goto-char (+ (nth 0 prev) (- old (nth 0 cur)))))
-              ;; Catch error in case regions overlap.
-              (error (goto-char old))))
-        (goto-char old)))))
+      (setq n (nth 3 cur))
+      (cond
+       ((markdown-prev-list-item n)
+	(setq prev (markdown-cur-list-item-bounds))
+	(condition-case nil
+	    (progn
+	      (transpose-regions (nth 0 prev) (nth 1 prev)
+				 (nth 0 cur) (nth 1 cur) t)
+	      (goto-char (+ (nth 0 prev) (- old (nth 0 cur)))))
+	  ;; Catch error in case regions overlap.
+	  (error (goto-char old))))
+       ((and unbounded (markdown-prev-list-item n t))
+	(setq prev (markdown-cur-list-item-bounds))
+	(condition-case nil
+	    (progn
+	      (transpose-regions (nth 1 prev) (nth 1 prev)
+				 (- (nth 0 cur) 1) (nth 1 cur) t)
+	      (goto-char (+ (nth 1 prev) (- old (- (nth 0 cur) 1)))))
+	  ;; Catch error in case regions overlap.
+	  (error (goto-char old))))
+       (t (goto-char old))))))
 
-(defun markdown-move-list-item-down ()
+(defun markdown-move-list-item-down (&optional unbounded)
   "Move the current list item down in the list when possible."
   (interactive)
-  (let (cur next old)
+  (setq unbounded t)
+  (let (cur next old n)
     (when (setq cur (markdown-cur-list-item-bounds))
       (setq old (point))
-      (if (markdown-next-list-item (nth 3 cur))
-          (progn
-            (setq next (markdown-cur-list-item-bounds))
-            (condition-case nil
-                (progn
-                  (transpose-regions (nth 0 cur) (nth 1 cur)
-                                     (nth 0 next) (nth 1 next) nil)
-                  (goto-char (+ old (- (nth 1 next) (nth 1 cur)))))
-              ;; Catch error in case regions overlap.
-              (error (goto-char old))))
-        (goto-char old)))))
+      (setq n (nth 3 cur))
+      (cond
+       ((markdown-next-list-item n)
+	(setq next (markdown-cur-list-item-bounds))
+	(condition-case nil
+	    (progn
+	      (transpose-regions (nth 0 cur) (nth 1 cur)
+				 (nth 0 next) (nth 1 next) nil)
+	      (goto-char (+ old (- (nth 1 next) (nth 1 cur)))))
+	  ;; Catch error in case regions overlap.
+	  (error (goto-char old))))
+       ((and unbounded (markdown-next-list-item n t))
+	(setq next (markdown-cur-list-item-bounds))
+	(condition-case nil
+	    (progn
+	      (transpose-regions (nth 0 cur) (+ 1 (nth 1 cur))
+				 (nth 0 next) (nth 0 next) nil)
+	      (goto-char (+ old (- (nth 0 next) (+ 1 (nth 1 cur))))))
+	  ;; Catch error in case regions overlap.
+	  (error (goto-char old))))
+       (t (goto-char old))))))
 
 (defun markdown-demote-list-item (&optional bounds)
   "Indent (or demote) the current list item.
